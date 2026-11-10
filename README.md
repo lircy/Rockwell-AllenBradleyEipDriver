@@ -21,6 +21,7 @@ EtherNet/IP communication driver for Rockwell Allen-Bradley ControlLogix / Compa
 
 ```csharp
 using AB_EIP_CONTROL_LOGIX_SERIES;
+using Microsoft.Extensions.Logging;
 
 var driver = new AllenBradleyEipDriver();
 
@@ -28,6 +29,11 @@ var driver = new AllenBradleyEipDriver();
 driver.Reconnect.Enabled = true;
 driver.OnConnectionLost   += () => Log("Connection lost, reconnecting...");
 driver.OnReconnected      += () => Log("Reconnected");
+
+// Optional: inject logging (Microsoft.Extensions.Logging.ILogger;
+// defaults to NullLogger.Instance — no output when not assigned).
+// Minimal implementation shown at the bottom of this snippet.
+driver.Logger = new ConsoleLogger();
 
 // Connect (slot defaults to 1, i.e. routing path 01 01)
 uint status = driver.Connect("192.168.0.110");
@@ -54,6 +60,22 @@ IntPtr root2 = driver.LoadSymbolsFromFile(@"D:\proj\tsoft.ACD");
 ACDControllerInfo off = driver.OfflineControllerInfo;
 
 driver.Disconnect();
+```
+
+Logged events (level): connection attempt / connected with device description / LargeForwardOpen negotiation & fallback / disconnect / online & offline tag tree loaded (Information); TCP or ForwardOpen failure / connection lost (Warning); reconnect attempts, success, and giving up after `Reconnect.MaxRetries` (Information / Information / Error). Reconnect logs are raised on a background thread — UI consumers must Invoke themselves.
+
+```csharp
+// Minimal ILogger implementation (dependency: Lib\Net4x.Extensions.Logging.Abstractions.dll):
+sealed class ConsoleLogger : ILogger
+{
+    public IDisposable BeginScope<TState>(TState state) { return null; }
+    public bool IsEnabled(LogLevel logLevel) { return true; }
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+        Exception exception, Func<TState, Exception, string> formatter)
+    {
+        Console.WriteLine("[{0}] {1}", logLevel, formatter(state, exception));
+    }
+}
 ```
 
 ## API Reference

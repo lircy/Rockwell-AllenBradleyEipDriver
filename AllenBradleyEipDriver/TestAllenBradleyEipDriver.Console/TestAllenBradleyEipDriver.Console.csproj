@@ -38,6 +38,9 @@
     <Reference Include="AllenBradleyEipDriver">
       <HintPath>..\Lib\AllenBradleyEipDriver.dll</HintPath>
     </Reference>
+    <Reference Include="Net4x.Extensions.Logging.Abstractions">
+      <HintPath>..\Lib\Net4x.Extensions.Logging.Abstractions.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Xml.Linq" />
@@ -48,6 +51,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="ConsoleLogger.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

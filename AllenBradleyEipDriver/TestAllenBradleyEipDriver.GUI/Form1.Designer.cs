@@ -1,11 +1,16 @@
-namespace TestAllenBradleyEipDriver.GUI
+﻿namespace TestAllenBradleyEipDriver.GUI
 {
     partial class Form1
     {
-        /// <summary>必需的设计器变量。</summary>
+        /// <summary>
+        /// 必需的设计器变量。
+        /// </summary>
         private System.ComponentModel.IContainer components = null;
 
-        /// <summary>清理所有正在使用的资源。</summary>
+        /// <summary>
+        /// 清理所有正在使用的资源。
+        /// </summary>
+        /// <param name="disposing">如果应释放托管资源，为 true；否则为 false。</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && (components != null))
@@ -27,12 +32,9 @@ namespace TestAllenBradleyEipDriver.GUI
             this.lblSubtitle = new System.Windows.Forms.Label();
             this.lblTitle = new System.Windows.Forms.Label();
             this.groupBox1 = new System.Windows.Forms.GroupBox();
-            this.btnDiag = new System.Windows.Forms.Button();
-            this.btnContractSmoke = new System.Windows.Forms.Button();
+            this.btnSmoke = new System.Windows.Forms.Button();
             this.btnDisconnect = new System.Windows.Forms.Button();
             this.btnConnect = new System.Windows.Forms.Button();
-            this.tbPassword = new System.Windows.Forms.TextBox();
-            this.labelPassword = new System.Windows.Forms.Label();
             this.tbUser = new System.Windows.Forms.TextBox();
             this.labelUser = new System.Windows.Forms.Label();
             this.tbPort = new System.Windows.Forms.TextBox();
@@ -84,7 +86,7 @@ namespace TestAllenBradleyEipDriver.GUI
             this.lblSubtitle.Name = "lblSubtitle";
             this.lblSubtitle.Size = new System.Drawing.Size(240, 17);
             this.lblSubtitle.TabIndex = 1;
-            this.lblSubtitle.Text = "EtherNet/IP (CIP) · AllenBradleyEipDriver 原生 API";
+            this.lblSubtitle.Text = "AllenBradleyEipDriver 原生 API 测试 · EtherNet/IP";
             //
             // lblTitle
             //
@@ -95,17 +97,14 @@ namespace TestAllenBradleyEipDriver.GUI
             this.lblTitle.Name = "lblTitle";
             this.lblTitle.Size = new System.Drawing.Size(90, 22);
             this.lblTitle.TabIndex = 0;
-            this.lblTitle.Text = "罗克韦尔 AB 驱动测试";
+            this.lblTitle.Text = "Allen-Bradley EtherNet/IP 驱动测试";
             //
             // groupBox1
             //
             this.groupBox1.BackColor = System.Drawing.Color.White;
-            this.groupBox1.Controls.Add(this.btnDiag);
-            this.groupBox1.Controls.Add(this.btnContractSmoke);
+            this.groupBox1.Controls.Add(this.btnSmoke);
             this.groupBox1.Controls.Add(this.btnDisconnect);
             this.groupBox1.Controls.Add(this.btnConnect);
-            this.groupBox1.Controls.Add(this.tbPassword);
-            this.groupBox1.Controls.Add(this.labelPassword);
             this.groupBox1.Controls.Add(this.tbUser);
             this.groupBox1.Controls.Add(this.labelUser);
             this.groupBox1.Controls.Add(this.tbPort);
@@ -121,38 +120,22 @@ namespace TestAllenBradleyEipDriver.GUI
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "连接";
             //
-            // btnDiag
-            //
-            this.btnDiag.BackColor = System.Drawing.Color.White;
-            this.btnDiag.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(200)))), ((int)(((byte)(204)))), ((int)(((byte)(212)))));
-            this.btnDiag.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(243)))), ((int)(((byte)(246)))), ((int)(((byte)(250)))));
-            this.btnDiag.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnDiag.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnDiag.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(51)))), ((int)(((byte)(51)))), ((int)(((byte)(51)))));
-            this.btnDiag.Location = new System.Drawing.Point(232, 104);
-            this.btnDiag.Name = "btnDiag";
-            this.btnDiag.Size = new System.Drawing.Size(72, 28);
-            this.btnDiag.TabIndex = 11;
-            this.btnDiag.Text = "批量读";
-            this.btnDiag.UseVisualStyleBackColor = false;
-            this.btnDiag.Click += new System.EventHandler(this.btnBatchRead_Click);
-            //
-            // btnContractSmoke
-            //
-            this.btnContractSmoke.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
-            this.btnContractSmoke.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
-            this.btnContractSmoke.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(56)))), ((int)(((byte)(142)))), ((int)(((byte)(60)))));
-            this.btnContractSmoke.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnContractSmoke.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.btnContractSmoke.ForeColor = System.Drawing.Color.White;
-            this.btnContractSmoke.Location = new System.Drawing.Point(140, 104);
-            this.btnContractSmoke.Name = "btnContractSmoke";
-            this.btnContractSmoke.Size = new System.Drawing.Size(86, 28);
-            this.btnContractSmoke.TabIndex = 10;
-            this.btnContractSmoke.Text = "读写冒烟";
-            this.btnContractSmoke.UseVisualStyleBackColor = false;
-            this.btnContractSmoke.Click += new System.EventHandler(this.btnSmoke_Click);
-            //
+            // btnSmoke
+            // 
+            this.btnSmoke.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
+            this.btnSmoke.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(((int)(((byte)(46)))), ((int)(((byte)(125)))), ((int)(((byte)(50)))));
+            this.btnSmoke.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(56)))), ((int)(((byte)(142)))), ((int)(((byte)(60)))));
+            this.btnSmoke.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnSmoke.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnSmoke.ForeColor = System.Drawing.Color.White;
+            this.btnSmoke.Location = new System.Drawing.Point(140, 104);
+            this.btnSmoke.Name = "btnSmoke";
+            this.btnSmoke.Size = new System.Drawing.Size(86, 28);
+            this.btnSmoke.TabIndex = 10;
+            this.btnSmoke.Text = "冒烟";
+            this.btnSmoke.UseVisualStyleBackColor = false;
+            this.btnSmoke.Click += new System.EventHandler(this.btnSmoke_Click);
+            // 
             // btnDisconnect
             //
             this.btnDisconnect.BackColor = System.Drawing.Color.White;
@@ -184,29 +167,6 @@ namespace TestAllenBradleyEipDriver.GUI
             this.btnConnect.Text = "连接";
             this.btnConnect.UseVisualStyleBackColor = false;
             this.btnConnect.Click += new System.EventHandler(this.btnConnect_Click);
-            //
-            // tbPassword
-            //
-            this.tbPassword.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.tbPassword.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.tbPassword.Location = new System.Drawing.Point(196, 66);
-            this.tbPassword.Name = "tbPassword";
-            this.tbPassword.PasswordChar = '*';
-            this.tbPassword.Size = new System.Drawing.Size(114, 23);
-            this.tbPassword.TabIndex = 7;
-            this.tbPassword.Visible = false;
-            //
-            // labelPassword
-            //
-            this.labelPassword.AutoSize = true;
-            this.labelPassword.Font = new System.Drawing.Font("微软雅黑", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.labelPassword.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(102)))), ((int)(((byte)(102)))), ((int)(((byte)(102)))));
-            this.labelPassword.Location = new System.Drawing.Point(162, 69);
-            this.labelPassword.Name = "labelPassword";
-            this.labelPassword.Size = new System.Drawing.Size(32, 17);
-            this.labelPassword.TabIndex = 6;
-            this.labelPassword.Text = "密码";
-            this.labelPassword.Visible = false;
             //
             // tbUser
             //
@@ -549,7 +509,7 @@ namespace TestAllenBradleyEipDriver.GUI
             this.MinimumSize = new System.Drawing.Size(1000, 700);
             this.Name = "Form1";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "TestAllenBradleyEipDriver.GUI - 罗克韦尔 Allen-Bradley ControlLogix demo";
+            this.Text = "TestAllenBradleyEipDriver.GUI - Allen-Bradley EtherNet/IP 驱动测试";
             this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.Form1_FormClosed);
             this.headerPanel.ResumeLayout(false);
             this.headerPanel.PerformLayout();
@@ -570,12 +530,9 @@ namespace TestAllenBradleyEipDriver.GUI
         private System.Windows.Forms.Label lblSubtitle;
         private System.Windows.Forms.Label lblTitle;
         private System.Windows.Forms.GroupBox groupBox1;
-        private System.Windows.Forms.Button btnDiag;
-        private System.Windows.Forms.Button btnContractSmoke;
+        private System.Windows.Forms.Button btnSmoke;
         private System.Windows.Forms.Button btnDisconnect;
         private System.Windows.Forms.Button btnConnect;
-        private System.Windows.Forms.TextBox tbPassword;
-        private System.Windows.Forms.Label labelPassword;
         private System.Windows.Forms.TextBox tbUser;
         private System.Windows.Forms.Label labelUser;
         private System.Windows.Forms.TextBox tbPort;

@@ -1,129 +1,297 @@
-using AB_EIP_CONTROL_LOGIX_SERIES;
+﻿using AB_EIP_CONTROL_LOGIX_SERIES;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
-using System.Threading.Tasks;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace TestAllenBradleyEipDriver.GUI
 {
     /// <summary>
-    /// AllenBradleyEipDriver (罗克韦尔 Allen-Bradley ControlLogix/CompactLogix/SoftLogix EtherNet/IP) GUI 测试 demo —
-    /// 按驱动原生 handle 式 API 编写 (该驱动未接入 DriverContracts 统一契约):
-    ///   连接/断开:   Connect(ip, slot, port) → ControllerInfo.ShortDescription; Disconnect()
-    ///   变量树:      LoadSymbolsFromFile(.acd 离线) / LoadSymbolsFromPLC(在线) → Browse(handle) 惰性展开
-    ///                (子节点是否可展开经 GetChildCount 判定, 叶子节点不挂占位, 无展开箭头)
-    ///   读写:        Read(List&lt;string&gt;, out List&lt;PValue&gt;) / Write(tag, PValue)
-    ///   冒烟:        抽样批量读×2比对 + BOOL 取反写往返恢复 (写候选仅取 ExternalAccess=ReadWrite)
+    /// AllenBradleyEipDriver (罗克韦尔 ControlLogix/CompactLogix/SoftLogix
+    /// EtherNet/IP) GUI 测试 demo — 窗体样式严格对照 AllenBradleyEipDriverDemo_Optimize
+    /// （头部横幅/连接/读写/工程加载/树浏览/日志区统一布局），事件处理以当前核心库
+    /// 原生 API 实现；FormNativeDiag 诊断窗不引入（无契约依赖）。
     /// </summary>
     public partial class Form1 : Form
     {
-        private readonly AllenBradleyEipDriver driver = new AllenBradleyEipDriver();
-        private IntPtr _treeRoot = IntPtr.Zero;
+        private const string ProjectFilter = "Studio 5000 工程归档 (*.acd)|*.acd";
 
-        private static readonly HashSet<AllenBradleyVarType> CompositeTypes = new HashSet<AllenBradleyVarType>
-        {
-            AllenBradleyVarType.ROOT, AllenBradleyVarType.ARRAY, AllenBradleyVarType.STRUCT,
-            AllenBradleyVarType.AbbreviatedSTRUCT, AllenBradleyVarType.VARINSTANCE,
-            AllenBradleyVarType.Union, AllenBradleyVarType.Program
-        };
+        private readonly AllenBradleyEipDriver controller = new AllenBradleyEipDriver();
 
         public Form1()
         {
             InitializeComponent();
-            // 重连事件来自后台线程, Log/SetStatus 内部已 Invoke 回 UI 线程
-            driver.OnConnectionLost += () => Log("连接断开, 自动重连中…");
-            driver.OnReconnecting += (attempt) => Log("重连第 " + attempt + " 次…");
-            driver.OnReconnected += () => Log("重连成功");
+            controller.Reconnect.Enabled = true;
+            // ILogger 注入：核心库生命周期日志输出到日志区（未注入时内部为 NullLogger）。
+            controller.Logger = new TextBoxLogger(tbLog);
+            controller.OnConnectionLost += () => InvokeIfNeeded(() => Log("[事件] ConnectionLost (连接断开，自动重连中...)"));
+            controller.OnReconnecting += (attempt) => InvokeIfNeeded(() => Log("[事件] 第 " + attempt + " 次重连尝试..."));
+            controller.OnReconnected += () => InvokeIfNeeded(() => Log("[事件] 重连成功"));
         }
 
-        // ---------------- 日志 / 状态 ----------------
+        // ---------- 公共辅助 ----------
 
-        private void Log(string msg)
+        private void InvokeIfNeeded(Action action)
         {
             if (IsDisposed) return;
-            if (InvokeRequired) { try { BeginInvoke(new Action<string>(Log), msg); } catch { } return; }
-            tbLog.AppendText("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg + Environment.NewLine);
-        }
-
-        private void SetStatus(string text)
-        {
-            if (IsDisposed) return;
-            if (InvokeRequired) { try { BeginInvoke(new Action<string>(SetStatus), text); } catch { } return; }
-            lbStatus.Text = text;
-        }
-
-        private int ParsePort()
-        {
-            int port;
-            if (!int.TryParse(tbPort.Text.Trim(), out port) || port <= 0 || port > 65535)
-                throw new ArgumentException("端口无效: " + tbPort.Text);
-            return port;
-        }
-
-        private byte ParseSlot()
-        {
-            int slot;
-            if (string.IsNullOrEmpty(tbUser.Text.Trim())) return 1;
-            if (!int.TryParse(tbUser.Text.Trim(), out slot) || slot < 0 || slot > 255)
-                throw new ArgumentException("槽号无效 (0-255): " + tbUser.Text);
-            return (byte)slot;
-        }
-
-        // ---------------- 连接 ----------------
-
-        private void btnConnect_Click(object sender, EventArgs e)
-        {
             try
             {
-                string host = tbHost.Text.Trim();
-                if (host.Length == 0) { MessageBox.Show("请输入 PLC 地址"); return; }
-                int port = ParsePort();
-                byte slot = ParseSlot();
-                SetStatus("正在连接 " + host + ":" + port + " (槽号 " + slot + ") …");
-                uint status = driver.Connect(host, slot, port);
-                if (status != 0)
+                if (InvokeRequired) BeginInvoke(action);
+                else action();
+            }
+            catch { /* 窗口关闭过程中的回调 */ }
+        }
+
+        private void Log(string message)
+        {
+            tbLog.AppendText("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + message + Environment.NewLine);
+        }
+
+        private void setStatus(string status)
+        {
+            lbStatus.Text = status;
+        }
+
+        /// <summary>未连接则按界面参数自动连接；返回是否可用。</summary>
+        private bool EnsureConnected()
+        {
+            if (controller.IsConnected) return true;
+            try
+            {
+                int port;
+                byte slot;
+                if (!int.TryParse(tbPort.Text.Trim(), out port) || port <= 0) port = 44818;
+                if (!byte.TryParse(tbUser.Text.Trim(), out slot)) slot = 1;
+                uint st = controller.Connect(tbHost.Text.Trim(), slot, port);
+                if (st == 0)
                 {
-                    SetStatus("连接失败");
-                    MessageBox.Show("连接失败, 返回码: " + status);
-                    return;
+                    DeviceInfo info = controller.ControllerInfo;
+                    Log("已连接 " + tbHost.Text.Trim() + " 槽号 " + slot
+                        + (info != null ? "，" + info.ShortDescription : ""));
                 }
-                DeviceInfo info = driver.ControllerInfo;
-                string device = info != null ? info.ShortDescription : "(无设备信息)";
-                SetStatus("已连接 " + host + ":" + port);
-                Log("连接成功: " + host + ":" + port + " (槽号 " + slot + ")  " + device);
+                else
+                {
+                    Log("连接失败 0x" + st.ToString("X"));
+                }
+                return controller.IsConnected;
             }
             catch (Exception ex)
             {
-                SetStatus("连接失败");
                 Log("连接异常: " + ex.Message);
-                MessageBox.Show("连接异常: " + ex.Message);
+                return false;
             }
+        }
+
+        /// <summary>取 ItemAddress 的完整符号路径；失败返回 null。</summary>
+        private static string SymbolOf(ItemAddress item)
+        {
+            string symbol;
+            return item != null && item.GetSymbol(out symbol) == 0 ? symbol : null;
+        }
+
+        /// <summary>树节点显示文本：非 ReadWrite 的节点加访问权限后缀。</summary>
+        private static string NodeText(ItemAddress item)
+        {
+            switch (item.ExternalAccess)
+            {
+                case ABExternalAccess.ReadOnly: return item.Name + "（只读）";
+                case ABExternalAccess.None: return item.Name + "（不可访问）";
+                default: return item.Name;
+            }
+        }
+
+        /// <summary>把 ROOT 下一层符号填进树视图（懒加载：有子节点的挂占位）。</summary>
+        private void FillRootNodes(IntPtr rootHandle)
+        {
+            treeView1.Nodes.Clear();
+            if (rootHandle == IntPtr.Zero) return;
+            List<ItemAddress> items = controller.Browse(rootHandle);
+            if (items == null) return;
+            foreach (ItemAddress item in items)
+            {
+                TreeNode tn = treeView1.Nodes.Add(NodeText(item));
+                tn.Tag = item;
+                int childCount;
+                if (item.GetChildCount(out childCount) == 0 && childCount > 0)
+                    tn.Nodes.Add("Loading...");
+            }
+        }
+
+        /// <summary>选中叶与 symbol 一致时的写权限拦截（只读/不可访问）：
+        /// 返回拒绝原因文案，可写返回 null。</summary>
+        private string SelectedLeafBlockReason(string symbol)
+        {
+            TreeNode ui = treeView1 == null ? null : treeView1.SelectedNode;
+            ItemAddress item = ui == null ? null : ui.Tag as ItemAddress;
+            if (item == null) return null;
+            string path = SymbolOf(item);
+            if (path == null || !string.Equals(path, symbol, StringComparison.Ordinal)) return null;
+            switch (item.ExternalAccess)
+            {
+                case ABExternalAccess.ReadOnly: return "Read Only（只读）";
+                case ABExternalAccess.None: return "None（不可访问）";
+                default: return null;
+            }
+        }
+
+        /// <summary>文本 → PValue（按类型枚举名解析；复合类型不支持文本写）。</summary>
+        private static PValue BuildValue(string dataType, string text)
+        {
+            switch ((dataType ?? string.Empty).Trim().ToUpperInvariant())
+            {
+                case "BOOL":
+                    {
+                        string t = (text ?? string.Empty).Trim();
+                        if (t == "1") return new ValueBool(true);
+                        if (t == "0") return new ValueBool(false);
+                        return new ValueBool(bool.Parse(t));
+                    }
+                case "SINT": return new ValueSInt(sbyte.Parse(text));
+                case "INT": return new ValueInt(short.Parse(text));
+                case "DINT": return new ValueDInt(int.Parse(text));
+                case "LINT": return new ValueLInt(long.Parse(text));
+                case "USINT": return new ValueUSInt(byte.Parse(text));
+                case "UINT": return new ValueUInt(ushort.Parse(text));
+                case "UDINT": return new ValueUDInt(uint.Parse(text));
+                case "ULINT": return new ValueULInt(ulong.Parse(text));
+                case "REAL": return new ValueReal(float.Parse(text));
+                case "LREAL": return new ValueLReal(double.Parse(text));
+                case "STRING": return new ValueString(text);
+                default: throw new NotSupportedException("该类型不支持文本写入: " + dataType);
+            }
+        }
+
+        // ---------- 连接 ----------
+
+        private void btnConnect_Click(object sender, EventArgs e)
+        {
+            setStatus("connecting...");
+            if (EnsureConnected()) setStatus("connected");
+            else setStatus("error");
         }
 
         private void btnDisconnect_Click(object sender, EventArgs e)
         {
-            try
-            {
-                driver.Disconnect();
-                SetStatus("已断开");
-                Log("已断开连接");
-            }
-            catch (Exception ex)
-            {
-                Log("断开异常: " + ex.Message);
-            }
+            setStatus("disconnecting...");
+            controller.Disconnect();
+            treeView1.Nodes.Clear();
+            tbSymbol.Text = string.Empty;
+            tbDatatype.Text = string.Empty;
+            tbValue.Text = string.Empty;
+            setStatus("disconnected");
         }
 
-        // ---------------- 变量树 ----------------
+        /// <summary>遍历当前符号树全部叶，返回完整符号路径清单。</summary>
+        private List<string> GetAllSymbols()
+        {
+            List<string> symbols = new List<string>();
+            foreach (ItemAddress item in controller.LoadAllSymbolicInfo())
+            {
+                string symbol;
+                if (item.GetSymbol(out symbol) == 0)
+                    symbols.Add(symbol);
+            }
+            return symbols;
+        }
+
+        /// <summary>过滤出可符号读的路径：排除 __ 系统标签与 ZZZZZZZZZZ BOOL 宿主；
+        /// 含冒号的模块标签（Local:3:C...）不参与抽样，但程序域 Program: 标签是普通
+        /// 控制器标签（与契约版口径一致），放行参与抽样。</summary>
+        private static bool IsReadable(string symbol)
+        {
+            if (symbol.StartsWith("__") || symbol.Contains("ZZZZZZZZZZ")) return false;
+            if (symbol.Contains(":") && !symbol.StartsWith("Program:")) return false;
+            return true;
+        }
+
+        private void btnSmoke_Click(object sender, EventArgs e)
+        {
+            string path = tbProject.Text.Trim();
+            bool hasProject = path.Length > 0 && File.Exists(path);
+            if (!EnsureConnected()) return;
+            btnSmoke.Enabled = false;
+            setStatus("smoke running...");
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool overall = true;
+                try
+                {
+                    List<string> offlineSymbols = null;
+                    if (hasProject)
+                    {
+                        controller.LoadSymbolsFromFile(path);
+                        offlineSymbols = GetAllSymbols();
+                        InvokeIfNeeded(() => Log("冒烟: 离线符号 " + offlineSymbols.Count + " (对拍基准)"));
+                    }
+                    controller.LoadSymbolsFromPLC();
+                    List<string> onlineSymbols = GetAllSymbols();
+                    InvokeIfNeeded(() => Log("冒烟: 在线符号 " + onlineSymbols.Count));
+                    if (offlineSymbols != null)
+                    {
+                        var offlineSet = new HashSet<string>(offlineSymbols);
+                        var onlineSet = new HashSet<string>(onlineSymbols);
+                        var missingOnline = offlineSet.Where(s => !onlineSet.Contains(s)).ToList();
+                        var missingOffline = onlineSet.Where(s => !offlineSet.Contains(s)).ToList();
+                        int diff = missingOnline.Count + missingOffline.Count;
+                        overall &= diff == 0;
+                        InvokeIfNeeded(() =>
+                        {
+                            Log("冒烟: 离线/在线对拍 " + (diff == 0
+                                ? "一致 (" + offlineSet.Count + " 个符号)"
+                                : "差异 " + diff + " (离线缺 " + missingOffline.Count + ", 在线缺 " + missingOnline.Count + ")"));
+                            foreach (string s in missingOnline.Take(10)) Log("  在线缺少: " + s);
+                            foreach (string s in missingOffline.Take(10)) Log("  离线缺少: " + s);
+                        });
+                    }
+                    List<string> readable = onlineSymbols.Where(IsReadable).ToList();
+                    List<string> sample = readable.Take(30).ToList();
+                    int ok = 0, fail = 0;
+                    foreach (string sym in sample)
+                    {
+                        try
+                        {
+                            List<PValue> v = new List<PValue>();
+                            if (controller.Read(new List<string> { sym }, out v) == 0) ok++;
+                            else { fail++; InvokeIfNeeded(() => Log("  读失败: " + sym)); }
+                        }
+                        catch (Exception ex) { fail++; InvokeIfNeeded(() => Log("  异常: " + sym + " -> " + ex.Message)); }
+                    }
+                    overall &= fail == 0;
+                    InvokeIfNeeded(() => Log("冒烟: 抽样读 " + ok + "/" + sample.Count));
+                    List<string> batch = readable.Take(50).ToList();
+                    if (batch.Count > 0)
+                    {
+                        List<PValue> bv = new List<PValue>();
+                        ushort bst = controller.Read(batch, out bv);
+                        bool bok = bst == 0 && bv.Count == batch.Count;
+                        overall &= bok;
+                        InvokeIfNeeded(() => Log("冒烟: 批量读 " + batch.Count + " -> " + (bok ? "成功" : "失败 0x" + bst.ToString("X4"))));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    overall = false;
+                    InvokeIfNeeded(() => Log("冒烟异常: " + ex.Message));
+                }
+                finally
+                {
+                    InvokeIfNeeded(() =>
+                    {
+                        setStatus(overall ? "smoke passed" : "smoke failed");
+                        btnSmoke.Enabled = true;
+                    });
+                }
+            });
+        }
+
+        // ---------- 符号树 (在线 / 离线 .acd, 懒加载) ----------
 
         private void btnBrowse_Click(object sender, EventArgs e)
         {
-            using (OpenFileDialog dlg = new OpenFileDialog())
+            using (OpenFileDialog dlg = new OpenFileDialog { Filter = ProjectFilter })
             {
-                dlg.Filter = "AB 工程归档 (*.acd)|*.acd";
-                dlg.Title = "选择 .acd 工程归档文件";
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                     tbProject.Text = dlg.FileName;
             }
@@ -131,384 +299,210 @@ namespace TestAllenBradleyEipDriver.GUI
 
         private void btnLoadProject_Click(object sender, EventArgs e)
         {
-            string file = tbProject.Text.Trim();
-            if (file.Length == 0 || !File.Exists(file))
+            string path = tbProject.Text.Trim();
+            if (path.Length == 0 || !File.Exists(path))
             {
-                MessageBox.Show("请先选择存在的 .acd 工程归档文件");
+                Log("请先选择存在的 .acd 工程归档");
                 return;
             }
-            SetStatus("正在离线加载工程 …");
             try
             {
-                Stopwatch sw = Stopwatch.StartNew();
-                IntPtr root = driver.LoadSymbolsFromFile(file);
-                sw.Stop();
-                if (root == IntPtr.Zero) throw new Exception("LoadSymbolsFromFile 返回空句柄");
-                LoadTree(root);
-                ACDControllerInfo info = driver.OfflineControllerInfo;
-                string desc = info != null ? info.ToString() : string.Empty;
-                Log("离线加载工程成功: " + Path.GetFileName(file) + "  建树耗时 " + sw.ElapsedMilliseconds + " ms"
-                    + (desc.Length > 0 ? "  " + desc : string.Empty));
-                SetStatus("离线树已加载");
+                setStatus("loading...");
+                IntPtr rootHandle = controller.LoadSymbolsFromFile(path);
+                ACDControllerInfo info = controller.OfflineControllerInfo;
+                if (info != null)
+                {
+                    string sn = !string.IsNullOrEmpty(info.SerialNumber) ? "，SN " + info.SerialNumber : string.Empty;
+                    string sw = !string.IsNullOrEmpty(info.SoftwareVersion) ? "，" + info.SoftwareVersion : string.Empty;
+                    Log("离线工程控制器信息: " + info + sn + sw);
+                }
+                FillRootNodes(rootHandle);
+                setStatus("load finished");
+                Log("离线符号树已加载: " + path);
             }
             catch (Exception ex)
             {
-                SetStatus("加载工程失败");
-                Log("加载工程失败: " + ex.Message);
-                MessageBox.Show("加载工程失败: " + ex.Message);
+                setStatus("error");
+                Log("加载符号树失败: " + ex.Message);
             }
         }
 
         private void btnOnlineTree_Click(object sender, EventArgs e)
         {
-            if (!driver.IsConnected)
-            {
-                MessageBox.Show("请先连接 PLC");
-                return;
-            }
-            SetStatus("正在在线获取变量树 …");
+            if (!EnsureConnected()) return;
             try
             {
-                Stopwatch sw = Stopwatch.StartNew();
-                IntPtr root = driver.LoadSymbolsFromPLC();
-                sw.Stop();
-                if (root == IntPtr.Zero) throw new Exception("LoadSymbolsFromPLC 返回空句柄");
-                LoadTree(root);
-                Log("在线取树成功  耗时 " + sw.ElapsedMilliseconds + " ms");
-                SetStatus("在线树已加载");
+                setStatus("loading online tree...");
+                IntPtr rootHandle = controller.LoadSymbolsFromPLC();
+                FillRootNodes(rootHandle);
+                setStatus("online tree finished");
+                Log("在线符号树已加载");
             }
             catch (Exception ex)
             {
-                SetStatus("在线取树失败");
+                setStatus("error");
                 Log("在线取树失败: " + ex.Message);
-                MessageBox.Show("在线取树失败: " + ex.Message);
-            }
-        }
-
-        private void LoadTree(IntPtr rootHandle)
-        {
-            _treeRoot = rootHandle;
-            treeView1.BeginUpdate();
-            treeView1.Nodes.Clear();
-            TreeNode root = new TreeNode("ROOT");
-            root.Tag = rootHandle;
-            AddDummy(root);
-            treeView1.Nodes.Add(root);
-            FillChildren(root);
-            root.Expand();
-            treeView1.EndUpdate();
-        }
-
-        private static void AddDummy(TreeNode node)
-        {
-            node.Nodes.Add(new TreeNode("(加载中…)"));
-        }
-
-        /// <summary>
-        /// 调用驱动 Browse 展开一层子节点 (惰性加载)。
-        /// 是否可展开经 ItemAddress.GetChildCount 判定 (其内部即 Browse, 返回驱动缓存),
-        /// 仅给有子节点的节点挂占位 dummy, 叶子节点不挂 (无展开箭头)。
-        /// </summary>
-        private void FillChildren(TreeNode node)
-        {
-            node.Nodes.Clear();
-            IntPtr handle = node.Tag is ItemAddress ia ? ia.Handle : (IntPtr)node.Tag;
-            List<ItemAddress> items = driver.Browse(handle);
-            foreach (ItemAddress item in items)
-            {
-                TreeNode child = new TreeNode(item.Name + "  [" + item.Datatype + "]");
-                child.Tag = item;
-                int childCount;
-                if (item.GetChildCount(out childCount) == 0 && childCount > 0)
-                    AddDummy(child);
-                node.Nodes.Add(child);
             }
         }
 
         private void treeView1_BeforeExpand(object sender, TreeViewCancelEventArgs e)
         {
-            TreeNode node = e.Node;
-            if (node.Tag is ItemAddress && node.Nodes.Count == 1 && node.Nodes[0].Tag == null)
+            if (e.Node.Nodes.Count != 1 || e.Node.Nodes[0].Text != "Loading...") return;
+            ItemAddress parent = e.Node.Tag as ItemAddress;
+            e.Node.Nodes.Clear();
+            if (parent == null) return;
+            try
             {
-                try
+                List<ItemAddress> children = controller.Browse(parent.Handle);
+                if (children == null) return;
+                foreach (ItemAddress child in children)
                 {
-                    FillChildren(node);
-                    if (node.Nodes.Count == 0) e.Cancel = true;
+                    TreeNode tn = e.Node.Nodes.Add(NodeText(child));
+                    tn.Tag = child;
+                    int childCount;
+                    if (child.GetChildCount(out childCount) == 0 && childCount > 0)
+                        tn.Nodes.Add("Loading...");
                 }
-                catch (Exception ex)
-                {
-                    Log("展开节点失败: " + ex.Message);
-                    e.Cancel = true;
-                }
+            }
+            catch (Exception ex)
+            {
+                Log("展开节点失败: " + ex.Message);
             }
         }
 
         private void treeView1_AfterSelect(object sender, TreeViewEventArgs e)
         {
-            if (!(e.Node.Tag is ItemAddress item)) return;
-            string symbol;
-            item.GetSymbol(out symbol);
-            tbSymbol.Text = symbol;
-            tbDatatype.Text = item.Datatype.ToString();
-            if (item.ExternalAccess == ABExternalAccess.ReadOnly)
-                Log("提示: " + symbol + " 为只读 (ExternalAccess=ReadOnly), 写入将失败");
+            ItemAddress item = e.Node == null ? null : e.Node.Tag as ItemAddress;
+            if (item == null) return;
+            string symbol = SymbolOf(item);
+            if (symbol != null)
+            {
+                tbSymbol.Text = symbol;
+                tbDatatype.Text = item.Datatype.ToString();
+            }
         }
 
-        // ---------------- 单点读写 ----------------
-
-        private AllenBradleyVarType RequireScalarType()
-        {
-            if (tbSymbol.Text.Trim().Length == 0) throw new ArgumentException("请先在树中选中一个叶子变量");
-            AllenBradleyVarType type;
-            if (!Enum.TryParse(tbDatatype.Text.Trim(), out type))
-                throw new ArgumentException("未知数据类型: " + tbDatatype.Text);
-            if (CompositeTypes.Contains(type))
-                throw new ArgumentException("复合类型节点 (" + type + ") 不支持单点读写, 请展开后选择叶子变量");
-            return type;
-        }
+        // ---------- 读写 ----------
 
         private void btnRead_Click(object sender, EventArgs e)
         {
+            if (!EnsureConnected()) return;
+            string symbol = tbSymbol.Text.Trim();
+            if (symbol.Length == 0) return;
             try
             {
-                if (!driver.IsConnected) { MessageBox.Show("请先连接 PLC"); return; }
-                AllenBradleyVarType type = RequireScalarType();
-                string symbol = tbSymbol.Text.Trim();
-                List<string> names = new List<string> { symbol };
-                List<PValue> values;
-                Stopwatch sw = Stopwatch.StartNew();
-                ushort status = driver.Read(names, out values);
-                sw.Stop();
-                if (status != 0) { Log("读失败 " + symbol + "  st=" + status); MessageBox.Show("读失败, 状态码: " + status); return; }
-                if (values == null || values.Count == 0) { Log("读 " + symbol + " 无返回值"); return; }
-                tbValue.Text = values[0].ToStringWithType();
-                Log("读 " + symbol + "  [" + type + "] = " + tbValue.Text + "  (" + sw.ElapsedMilliseconds + " ms)");
+                List<PValue> values = new List<PValue>();
+                ushort st = controller.Read(new List<string> { symbol }, out values);
+                if (st == 0 && values.Count > 0)
+                {
+                    tbValue.Text = values[0].ToStringWithType();
+                    Log("读 " + symbol + " = " + values[0].ToStringWithType());
+                }
+                else
+                {
+                    Log("读 " + symbol + " 失败 0x" + st.ToString("X"));
+                }
             }
             catch (Exception ex)
             {
                 Log("读异常: " + ex.Message);
-                MessageBox.Show("读异常: " + ex.Message);
             }
         }
 
         private void btnWrite_Click(object sender, EventArgs e)
         {
-            DoWrite(false);
-        }
-
-        private void btnWriteText_Click(object sender, EventArgs e)
-        {
-            DoWrite(true);
-        }
-
-        /// <summary>按 AllenBradleyVarType 名解析文本值构造 PValue (该驱动无 PValue.Create 工厂)。</summary>
-        private static PValue CreatePValue(AllenBradleyVarType type, string text)
-        {
-            switch (type)
-            {
-                case AllenBradleyVarType.BOOL:
-                    return new ValueBool(ParseBool(text));
-                case AllenBradleyVarType.SINT: return new ValueSInt(Convert.ToSByte(text));
-                case AllenBradleyVarType.INT: return new ValueInt(Convert.ToInt16(text));
-                case AllenBradleyVarType.DINT: return new ValueDInt(Convert.ToInt32(text));
-                case AllenBradleyVarType.LINT: return new ValueLInt(Convert.ToInt64(text));
-                case AllenBradleyVarType.USINT: return new ValueUSInt(Convert.ToByte(text));
-                case AllenBradleyVarType.UINT: return new ValueUInt(Convert.ToUInt16(text));
-                case AllenBradleyVarType.UDINT: return new ValueUDInt(Convert.ToUInt32(text));
-                case AllenBradleyVarType.ULINT: return new ValueULInt(Convert.ToUInt64(text));
-                case AllenBradleyVarType.REAL: return new ValueReal(Convert.ToSingle(text));
-                case AllenBradleyVarType.LREAL: return new ValueLReal(Convert.ToDouble(text));
-                case AllenBradleyVarType.STRING: return new ValueString(text);
-                case AllenBradleyVarType.BYTE: return new ValueByte(Convert.ToByte(text));
-                case AllenBradleyVarType.WORD: return new ValueWord(Convert.ToUInt16(text));
-                case AllenBradleyVarType.DWORD: return new ValueDWord(Convert.ToUInt32(text));
-                case AllenBradleyVarType.LWORD: return new ValueLWord(Convert.ToUInt64(text));
-                default:
-                    throw new ArgumentException("暂不支持写入类型: " + type);
-            }
-        }
-
-        private static bool ParseBool(string text)
-        {
-            string t = text.Trim();
-            return t == "1" || t.Equals("true", StringComparison.OrdinalIgnoreCase)
-                || t.Equals("on", StringComparison.OrdinalIgnoreCase) || t.Equals("真", StringComparison.Ordinal);
-        }
-
-        private void DoWrite(bool asText)
-        {
+            if (!EnsureConnected()) return;
+            string symbol = tbSymbol.Text.Trim();
+            if (symbol.Length == 0) return;
+            string block = SelectedLeafBlockReason(symbol);
+            if (block != null) { Log("写 " + symbol + " 被拒绝: " + block); return; }
             try
             {
-                if (!driver.IsConnected) { MessageBox.Show("请先连接 PLC"); return; }
-                AllenBradleyVarType type = RequireScalarType();
-                string symbol = tbSymbol.Text.Trim();
-                string text = tbValue.Text;
-                PValue pv = asText && type == AllenBradleyVarType.STRING
-                    ? new ValueString(text)   // 字符串原样写入, 不做数值转换
-                    : CreatePValue(type, text.Trim());
-                Stopwatch sw = Stopwatch.StartNew();
-                ushort status = driver.Write(symbol, pv);
-                sw.Stop();
-                if (status != 0) { Log("写失败 " + symbol + "  st=" + status); MessageBox.Show("写失败, 状态码: " + status); return; }
-                Log("写 " + symbol + "  [" + type + "] = " + text.Trim() + "  (" + sw.ElapsedMilliseconds + " ms)");
+                PValue value = BuildValue(tbDatatype.Text, tbValue.Text.Trim());
+                ushort st = controller.Write(symbol, value);
+                Log("写 " + symbol + " ← " + tbValue.Text + " : " + (st == 0 ? "成功" : "失败 0x" + st.ToString("X")));
             }
             catch (Exception ex)
             {
                 Log("写异常: " + ex.Message);
-                MessageBox.Show("写异常: " + ex.Message);
             }
         }
 
-        // ---------------- 批量读 ----------------
-
-        /// <summary>递归收集选中节点下最多 maxCount 个叶子变量的符号路径。</summary>
-        private void CollectLeaves(TreeNode node, List<string> leaves, int maxCount)
+        private void btnWriteText_Click(object sender, EventArgs e)
         {
-            if (leaves.Count >= maxCount) return;
-            if (node.Tag is ItemAddress item && !CompositeTypes.Contains(item.Datatype))
-            {
-                string symbol;
-                item.GetSymbol(out symbol);
-                leaves.Add(symbol);
-                return;
-            }
-            if (node.Tag is ItemAddress && node.Nodes.Count == 1 && node.Nodes[0].Tag == null)
-                FillChildren(node); // 未展开的复合节点先展开一层
-            foreach (TreeNode child in node.Nodes)
-            {
-                if (leaves.Count >= maxCount) return;
-                CollectLeaves(child, leaves, maxCount);
-            }
-        }
-
-        private void btnBatchRead_Click(object sender, EventArgs e)
-        {
+            if (!EnsureConnected()) return;
+            string symbol = tbSymbol.Text.Trim();
+            if (symbol.Length == 0) return;
+            string block = SelectedLeafBlockReason(symbol);
+            if (block != null) { Log("文本写 " + symbol + " 被拒绝: " + block); return; }
             try
             {
-                if (!driver.IsConnected) { MessageBox.Show("请先连接 PLC"); return; }
-                if (_treeRoot == IntPtr.Zero) { MessageBox.Show("请先加载工程或在线取树"); return; }
-                TreeNode start = treeView1.SelectedNode ?? treeView1.Nodes[0];
-                List<string> leaves = new List<string>();
-                CollectLeaves(start, leaves, 100);
-                if (leaves.Count == 0) { MessageBox.Show("选中节点下没有叶子变量"); return; }
-
-                List<PValue> values;
-                Stopwatch sw = Stopwatch.StartNew();
-                ushort status = driver.Read(leaves, out values);
-                sw.Stop();
-                if (status != 0)
+                // 先读当前值确定类型，再按文本解析写入（模拟契约 WriteByText 语义）
+                List<PValue> current = new List<PValue>();
+                ushort rst = controller.Read(new List<string> { symbol }, out current);
+                if (rst != 0 || current.Count == 0)
                 {
-                    Log("批量读失败 st=" + status + " (共 " + leaves.Count + " 个)");
-                    MessageBox.Show("批量读失败, 状态码: " + status);
+                    Log("文本写失败: 无法读取当前值确定类型 (0x" + rst.ToString("X") + ")");
                     return;
                 }
-                Log("批量读 " + leaves.Count + " 个叶子, 耗时 " + sw.ElapsedMilliseconds + " ms:");
-                int show = Math.Min(values == null ? 0 : values.Count, 10);
-                for (int i = 0; i < show; i++)
-                    Log("  " + leaves[i] + " = " + values[i].ToStringWithType());
-                if (values != null && values.Count > show)
-                    Log("  … 其余 " + (values.Count - show) + " 个略");
-                SetStatus("批量读完成: " + leaves.Count + " 个 / " + sw.ElapsedMilliseconds + " ms");
+                string typeName = current[0].GetType().Name;   // e.g. ValueDInt
+                string dataType = typeName.StartsWith("Value", StringComparison.Ordinal) ? typeName.Substring(5) : typeName;
+                PValue value = BuildValue(dataType, tbValue.Text.Trim());
+                ushort st = controller.Write(symbol, value);
+                Log("文本写 " + symbol + " ← " + tbValue.Text + " (" + dataType + ") : " + (st == 0 ? "成功" : "失败 0x" + st.ToString("X")));
             }
             catch (Exception ex)
             {
-                Log("批量读异常: " + ex.Message);
-                MessageBox.Show("批量读异常: " + ex.Message);
+                Log("文本写异常: " + ex.Message);
             }
         }
-
-        // ---------------- 读写冒烟 ----------------
-
-        private void btnSmoke_Click(object sender, EventArgs e)
-        {
-            if (!driver.IsConnected) { MessageBox.Show("请先连接 PLC"); return; }
-            if (_treeRoot == IntPtr.Zero) { MessageBox.Show("请先加载工程或在线取树"); return; }
-            Task.Run((Action)RunSmoke);
-        }
-
-        private void RunSmoke()
-        {
-            try
-            {
-                Log("=== 读写冒烟开始 ===");
-                List<ItemAddress> leaves = driver.LoadAllSymbolicInfo();
-                if (leaves == null || leaves.Count == 0) { Log("冒烟中止: 变量树中没有叶子变量"); return; }
-                Log("叶子变量总数: " + leaves.Count);
-
-                // 1) 均匀抽样最多 30 个叶子, 批量读两遍并比对
-                int sample = Math.Min(30, leaves.Count);
-                List<string> names = new List<string>();
-                for (int i = 0; i < sample; i++)
-                {
-                    ItemAddress item = leaves[(int)((long)i * leaves.Count / sample)];
-                    string symbol;
-                    item.GetSymbol(out symbol);
-                    names.Add(symbol);
-                }
-                List<PValue> v1, v2;
-                Stopwatch sw = Stopwatch.StartNew();
-                ushort st1 = driver.Read(names, out v1);
-                long t1 = sw.ElapsedMilliseconds;
-                sw.Restart();
-                ushort st2 = driver.Read(names, out v2);
-                long t2 = sw.ElapsedMilliseconds;
-                if (st1 != 0 || st2 != 0) { Log("批量读失败 st1=" + st1 + " st2=" + st2); return; }
-                int mismatch = 0;
-                for (int i = 0; i < names.Count; i++)
-                {
-                    string a = v1[i] == null ? null : v1[i].ToStringWithType();
-                    string b = v2[i] == null ? null : v2[i].ToStringWithType();
-                    if (a != b) mismatch++;
-                }
-                Log("批量读×2比对: 抽样 " + names.Count + " 个, 第1遍 " + t1 + " ms, 第2遍 " + t2 + " ms, 不一致 " + mismatch + " 个");
-
-                // 2) 至多 3 个可写 (ReadWrite) 的 BOOL 叶子: 读原值 → 取反写 → 读回验证 → 恢复原值
-                int boolTests = 0, boolFail = 0;
-                foreach (ItemAddress item in leaves)
-                {
-                    if (boolTests >= 3) break;
-                    if (item.Datatype != AllenBradleyVarType.BOOL) continue;
-                    if (item.ExternalAccess != ABExternalAccess.ReadWrite) continue;
-                    string name;
-                    item.GetSymbol(out name);
-                    try
-                    {
-                        List<string> one = new List<string> { name };
-                        List<PValue> rb;
-                        if (driver.Read(one, out rb) != 0 || rb == null || rb.Count == 0) { boolFail++; boolTests++; continue; }
-                        bool original = ((ValueBool)rb[0]).GetValue();
-                        if (driver.Write(name, new ValueBool(!original)) != 0) { boolFail++; boolTests++; continue; }
-                        driver.Read(one, out rb);
-                        bool flipped = rb != null && rb.Count > 0 && ((ValueBool)rb[0]).GetValue() == !original;
-                        driver.Write(name, new ValueBool(original));
-                        driver.Read(one, out rb);
-                        bool restored = rb != null && rb.Count > 0 && ((ValueBool)rb[0]).GetValue() == original;
-                        Log("  BOOL 写往返 " + name + ": 原值=" + original + " 取反生效=" + flipped + " 已恢复=" + restored);
-                        if (!flipped || !restored) boolFail++;
-                        boolTests++;
-                    }
-                    catch (Exception ex)
-                    {
-                        Log("  BOOL 写往返 " + name + " 异常: " + ex.Message);
-                        boolFail++; boolTests++;
-                    }
-                }
-                Log("BOOL 写往返: " + boolTests + " 项, 失败 " + boolFail + " 项");
-                Log("=== 读写冒烟结束 ===");
-                SetStatus("冒烟完成: 比对不一致 " + mismatch + " / BOOL 失败 " + boolFail);
-            }
-            catch (Exception ex)
-            {
-                Log("冒烟异常: " + ex.Message);
-                SetStatus("冒烟异常");
-            }
-        }
-
-        // ---------------- 关闭 ----------------
 
         private void Form1_FormClosed(object sender, FormClosedEventArgs e)
         {
-            try { driver.Disconnect(); } catch { }
+            try { controller.Disconnect(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 演示 ILogger 注入的最小实现：把核心库日志追加到日志文本框。
+    /// 日志可能来自后台线程（重连线程等），内部统一 BeginInvoke 切回 UI 线程。
+    /// </summary>
+    sealed class TextBoxLogger : ILogger
+    {
+        private readonly TextBox _textBox;
+
+        public TextBoxLogger(TextBox textBox)
+        {
+            _textBox = textBox;
+        }
+
+        public IDisposable BeginScope<TState>(TState state)
+        {
+            return null;
+        }
+
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            return true;
+        }
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception exception, Func<TState, Exception, string> formatter)
+        {
+            Append("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] [" + logLevel + "] "
+                + formatter(state, exception) + Environment.NewLine);
+        }
+
+        private void Append(string text)
+        {
+            TextBox box = _textBox;
+            if (box == null || box.IsDisposed) return;
+            try
+            {
+                if (box.InvokeRequired) box.BeginInvoke(new Action(() => Append(text)));
+                else box.AppendText(text);
+            }
+            catch { /* 窗口关闭过程中的回调 */ }
         }
     }
 }
